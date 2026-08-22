@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 bootloader_api = "0.11"
+spin = "0.9"
+x86_64 = "0.15"
+pic8259 = "0.11"
+linked_list_allocator = "0.10"
 
 [build-dependencies]
 aegis-initfs = { path = "../servers/initfs", artifact = "bin", target = "x86_64-unknown-none" }

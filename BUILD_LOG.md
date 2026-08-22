@@ -18,3 +18,17 @@ Timestamped record of the autonomous build session. Times are local.
   ecosystem, QEMU trivially available). Kernel language: Rust (`#![no_std]`, freestanding
   target). Boot path: `bootloader` crate v0.11 (BIOS image) to avoid hand-writing boot
   sector/long-mode trampoline; attributed in DESIGN_DECISIONS.md.
+
+## Checkpoint 1 — boot (achieved ~21:20)
+
+- Fixed: bootloader crate's UEFI build fails on current nightly (`wcslen` link error, known
+  upstream incompatibility). Switched to `default-features = false, features = ["bios"]` —
+  we only ship BIOS images; QEMU's SeaBIOS is the target firmware.
+- Fixed: bindeps env vars use the *bin name verbatim* (`CARGO_BIN_FILE_AEGIS_INITFS_aegis-initfs`),
+  not the underscored form.
+- `./build.sh` now produces a bootable `aegis-bios.img`; `./run-qemu.sh` boots it headless
+  under Docker-hosted qemu-system-x86_64 with serial on stdio.
+- Verified by actually running it: kernel prints boot banner, full memory map (10 regions),
+  and sizes of the two embedded user-server ELFs.
+- Commit: `9b27c45`.
+

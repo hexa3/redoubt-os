@@ -1,129 +1,139 @@
+#![feature(abi_x86_interrupt)]
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
+mod frame;
+mod gdt;
+mod heap;
+mod interrupts;
+mod paging;
+mod serial;
+
 use core::arch::asm;
+use core::panic::PanicInfo;
 
+use bootloader_api::config::{BootloaderConfig, Mapping};
 use bootloader_api::{entry_point, BootInfo};
+use x86_64::structures::paging::PageTableFlags;
+use x86_64::VirtAddr;
 
-const COM1: u16 = 0x3f8;
+pub static BOOTLOADER_CONFIG: BootloaderConfig = {
+    let mut config = BootloaderConfig::new_default();
+    config.kernel_stack_size = 256 * 1024;
+    config.mappings.physical_memory = Some(Mapping::Dynamic);
+    config
+};
 
-fn port_out(port: u16, val: u8) {
-    unsafe { asm!("out dx, al", in("dx") port, in("al") val) }
-}
+entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
-fn port_in(port: u16) -> u8 {
-    let v: u8;
-    unsafe { asm!("in al, dx", out("al") v, in("dx") port) };
-    v
-}
+static INITFS_ELF: &[u8] = include_bytes!(env!("AEGIS_INITFS_PATH"));
+static CONSOLE_ELF: &[u8] = include_bytes!(env!("AEGIS_CONSOLE_PATH"));
 
-fn serial_init() {
-    port_out(COM1 + 1, 0x00);
-    port_out(COM1 + 3, 0x80);
-    port_out(COM1, 0x03);
-    port_out(COM1 + 1, 0x00);
-    port_out(COM1 + 3, 0x03);
-    port_out(COM1 + 2, 0xc7);
-    port_out(COM1 + 4, 0x0b);
-}
+fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
+    serial::init();
+    kprintln!("[aegis] kernel v0.1 booting");
 
-fn serial_putc(b: u8) {
-    while (port_in(COM1 + 5) & 0x20) == 0 {}
-    port_out(COM1, b);
-}
+    // stash physical memory offset before anything touches memory
+    let phys_off = boot_info
+        .physical_memory_offset
+        .into_option()
+        .expect("bootloader did not map physical memory");
+    paging::set_phys_offset(phys_off);
 
-fn serial_write(s: &[u8]) {
-    for &b in s {
-        if b == b'\n' {
-            serial_putc(b'\r');
-        }
-        serial_putc(b);
+    frame::init(&boot_info.memory_regions);
+    let (alloc, total) = frame::stats();
+    kprintln!("[aegis] frame allocator ready ({alloc}/{total} frames used)");
+
+    kprintln!("[aegis] init: gdt");
+    gdt::init();
+    kprintln!("[aegis] init: idt+pit");
+    interrupts::init();
+
+    kprintln!("[aegis] init: cr0/efer");
+    enable_write_protect_and_nxe();
+
+    kprintln!("[aegis] init: heap");
+    heap::init();
+    kprintln!("[aegis] kernel heap up (8 MiB @ {:#x})", crate::heap::HEAP_BASE);
+
+    // smoke tests
+    let mut v = alloc::vec::Vec::new();
+    for i in 0..1000u32 {
+        v.push(i);
     }
-}
+    let sum: u32 = v.iter().sum();
+    assert_eq!(sum, 499500);
+    kprintln!("[aegis] heap smoke test ok (sum of 0..1000 = {sum})");
 
-fn hlt_forever() -> ! {
+    x86_64::instructions::interrupts::enable();
+    let t0 = interrupts::ticks();
+    while interrupts::ticks() < t0 + 50 {
+        unsafe { asm!("hlt") };
+    }
+    let dt = interrupts::ticks() - t0;
+    kprintln!("[aegis] timer alive: +{dt} ticks (~{:.1}s at 100Hz)", dt as f64 / 100.0);
+
+    x86_64::instructions::interrupts::int3();
+
+    kprintln!(
+        "[aegis] initfs elf {} bytes, console elf {} bytes",
+        INITFS_ELF.len(),
+        CONSOLE_ELF.len()
+    );
+    kprintln!("[aegis] foundation ready; scheduler comes next");
+
     loop {
         unsafe { asm!("hlt") }
     }
 }
 
+fn enable_write_protect_and_nxe() {
+    use x86_64::registers::control::{Cr0, Cr0Flags};
+    unsafe {
+        Cr0::update(|f| f.insert(Cr0Flags::WRITE_PROTECT));
+    }
+    // EFER.NXE so NO_EXECUTE page flags are honored; also SCE for later syscall support
+    const IA32_EFER: u32 = 0xC000_0080;
+    const NXE: u64 = 1 << 11;
+    const SCE: u64 = 1 << 0;
+    let cur = unsafe { rdmsr(IA32_EFER) };
+    unsafe { wrmsr(IA32_EFER, cur | NXE | SCE) };
+}
+
+#[inline]
+unsafe fn rdmsr(msr: u32) -> u64 {
+    let (hi, lo): (u32, u32);
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack)
+        );
+    }
+    ((hi as u64) << 32) | lo as u64
+}
+
+#[inline]
+unsafe fn wrmsr(msr: u32, val: u64) {
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") (val & 0xffff_ffff) as u32,
+            in("edx") ((val >> 32) & 0xffff_ffff) as u32,
+            options(nostack)
+        );
+    }
+}
+
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    serial_write(b"AEGIS PANIC: ");
-    if let Some(loc) = info.location() {
-        // best-effort decimal printing without fmt machinery
-        serial_write(loc.file().as_bytes());
-        serial_write(b":");
-        print_dec(loc.line() as u64);
-    } else {
-        serial_write(b"unknown location");
-    }
-    serial_write(b"\n");
-    hlt_forever()
-}
-
-fn print_dec(mut v: u64) {
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
+fn panic(info: &PanicInfo) -> ! {
+    kprint!("[aegis][PANIC] {info}\n");
     loop {
-        i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-        if v == 0 {
-            break;
-        }
+        unsafe { asm!("hlt") }
     }
-    serial_write(&buf[i..]);
-}
-
-entry_point!(kernel_main);
-
-fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    serial_init();
-    serial_write(b"[aegis] kernel booted\n");
-
-    let regions = boot_info.memory_regions.len();
-    serial_write(b"[aegis] memory regions: ");
-    print_dec(regions as u64);
-    serial_write(b"\n");
-
-    for r in boot_info.memory_regions.iter() {
-        serial_write(b"  region kind=");
-        match r.kind {
-            bootloader_api::info::MemoryRegionKind::Usable => serial_write(b"usable"),
-            bootloader_api::info::MemoryRegionKind::Bootloader => serial_write(b"bootloader"),
-            bootloader_api::info::MemoryRegionKind::UnknownBios(t) => {
-                serial_write(b"bios:");
-                print_dec(t as u64);
-            }
-            other => serial_write(b"other"),
-        }
-        serial_write(b" start=0x");
-        print_hex(r.start);
-        serial_write(b" end=0x");
-        print_hex(r.end);
-        serial_write(b"\n");
-    }
-
-    serial_write(b"[aegis] initfs elf bytes: ");
-    print_dec(INITFS_ELF.len() as u64);
-    serial_write(b"\n");
-    serial_write(b"[aegis] console elf bytes: ");
-    print_dec(CONSOLE_ELF.len() as u64);
-    serial_write(b"\n");
-
-    serial_write(b"[aegis] hello from the kernel\n");
-    hlt_forever()
-}
-
-static INITFS_ELF: &[u8] = include_bytes!(env!("AEGIS_INITFS_PATH"));
-static CONSOLE_ELF: &[u8] = include_bytes!(env!("AEGIS_CONSOLE_PATH"));
-
-fn print_hex(v: u64) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut buf = [0u8; 16];
-    for (i, slot) in buf.iter_mut().enumerate() {
-        *slot = HEX[((v >> (60 - 4 * i)) & 0xf) as usize];
-    }
-    serial_write(&buf);
 }
