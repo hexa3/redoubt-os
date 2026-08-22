@@ -1,0 +1,8 @@
+[package]
+name = "aegis-initfs"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "aegis-initfs"
+path = "src/main.rs"

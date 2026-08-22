@@ -1,0 +1,15 @@
+[package]
+name = "aegis-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bootloader_api = "0.11"
+
+[build-dependencies]
+aegis-initfs = { path = "../servers/initfs", artifact = "bin", target = "x86_64-unknown-none" }
+aegis-console = { path = "../servers/console", artifact = "bin", target = "x86_64-unknown-none" }
+
+[[bin]]
+name = "aegis-kernel"
+path = "src/main.rs"

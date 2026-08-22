@@ -1,0 +1,4 @@
+/target
+aegis-bios.img
+*.img
+Cargo.lock.orig
