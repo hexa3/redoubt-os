@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
-# Run the Aegis disk image in QEMU.
+# Run the redoubt disk image in QEMU.
 # Prefers a locally installed qemu-system-x86_64; falls back to Docker.
 # Usage: ./run-qemu.sh [path/to/image.img] [extra qemu args...]
 set -euo pipefail
 cd "$(dirname "$0")"
 
-IMAGE="aegis-bios.img"
+IMAGE="redoubt-bios.img"
 if [[ $# -gt 0 ]]; then
     IMAGE="$1"
     shift
 fi
 
-QEMU_ARGS=(
-    -drive "format=raw,file=$IMAGE"
+QEMU_ARGS=(-drive "format=raw,file=$IMAGE")
+if [[ -f store.img ]]; then
+    # persistent appliance volume rides the secondary IDE master; the
+    # kernel enumerates it as disk 1 and storaged mounts it via caps
+    QEMU_ARGS+=(-drive "format=raw,file=store.img,if=none,id=d1" \
+                "-device" "ide-hd,drive=d1,bus=ide.1")
+fi
+QEMU_ARGS+=(
     -display none
     -serial stdio
     -no-reboot
 )
 
 run_qemu_docker() {
-    docker image inspect aegis-qemu >/dev/null 2>&1 || \
-        docker build -f docker/Dockerfile.qemu -t aegis-qemu . >/dev/null
+    docker image inspect redoubt-qemu >/dev/null 2>&1 || \
+        docker build -f docker/Dockerfile.qemu -t redoubt-qemu . >/dev/null
 
     local kvm_flags=""
     if [[ -e /dev/kvm && -w /dev/kvm ]]; then
@@ -31,7 +37,7 @@ run_qemu_docker() {
         -u "$(id -u):$(id -g)" \
         -e HOME=/tmp \
         -v "$(pwd):/work" -w /work \
-        aegis-qemu qemu-system-x86_64 "${QEMU_ARGS[@]}" "$@"
+        redoubt-qemu qemu-system-x86_64 "${QEMU_ARGS[@]}" "$@"
 }
 
 if command -v qemu-system-x86_64 >/dev/null 2>&1; then

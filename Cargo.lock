@@ -3,35 +3,6 @@
 version = 4
 
 [[package]]
-name = "aegis-build"
-version = "0.1.0"
-dependencies = [
- "aegis-kernel",
- "bootloader",
-]
-
-[[package]]
-name = "aegis-console"
-version = "0.1.0"
-
-[[package]]
-name = "aegis-initfs"
-version = "0.1.0"
-
-[[package]]
-name = "aegis-kernel"
-version = "0.1.0"
-dependencies = [
- "aegis-console",
- "aegis-initfs",
- "bootloader_api",
- "linked_list_allocator",
- "pic8259",
- "spin",
- "x86_64",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -279,6 +250,121 @@ name = "radium"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
+
+[[package]]
+name = "redoubt-build"
+version = "0.1.0"
+dependencies = [
+ "bootloader",
+ "redoubt-kernel",
+]
+
+[[package]]
+name = "redoubt-console"
+version = "0.1.0"
+dependencies = [
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-crypto"
+version = "0.1.0"
+dependencies = [
+ "spin",
+]
+
+[[package]]
+name = "redoubt-fault-test"
+version = "0.1.0"
+dependencies = [
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-heart"
+version = "0.1.0"
+dependencies = [
+ "redoubt-crypto",
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-hello"
+version = "0.1.0"
+dependencies = [
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-initfs"
+version = "0.1.0"
+dependencies = [
+ "redoubt-crypto",
+ "redoubt-fault-test",
+ "redoubt-heart",
+ "redoubt-hello",
+ "redoubt-shell",
+ "redoubt-storaged",
+ "redoubt-supd",
+ "redoubt-updated",
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-kernel"
+version = "0.1.0"
+dependencies = [
+ "bootloader_api",
+ "linked_list_allocator",
+ "pic8259",
+ "redoubt-console",
+ "redoubt-initfs",
+ "spin",
+ "x86_64",
+]
+
+[[package]]
+name = "redoubt-shell"
+version = "0.1.0"
+dependencies = [
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-storaged"
+version = "0.1.0"
+dependencies = [
+ "redoubt-crypto",
+ "redoubt-updated",
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-supd"
+version = "0.1.0"
+dependencies = [
+ "redoubt-crypto",
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-tools"
+version = "0.1.0"
+dependencies = [
+ "redoubt-crypto",
+]
+
+[[package]]
+name = "redoubt-updated"
+version = "0.1.0"
+dependencies = [
+ "redoubt-crypto",
+ "redoubt-userlib",
+]
+
+[[package]]
+name = "redoubt-userlib"
+version = "0.1.0"
 
 [[package]]
 name = "rustix"

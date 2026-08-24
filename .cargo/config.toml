@@ -3,5 +3,5 @@ bindeps = true
 
 [target.x86_64-unknown-none]
 rustflags = [
-    "-C", "target-feature=-mmx,-sse,+soft-float",
+    "-C", "target-feature=-sse",
 ]

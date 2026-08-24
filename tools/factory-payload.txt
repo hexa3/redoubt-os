@@ -1,0 +1,4 @@
+# redoubt system definition v1
+device-id=redoubt-dev-01
+min-generation=2
+service heart autostart restart

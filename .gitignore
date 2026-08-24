@@ -1,4 +1,13 @@
 /target
-aegis-bios.img
+redoubt-bios.img
 *.img
 Cargo.lock.orig
+*.log
+dist/
+
+# Local development signing material and generated captures.
+keys/dev/*.seed
+keys/dev/*.pub
+.redoubt-screen.*
+.drive-screen.*
+.ci-*

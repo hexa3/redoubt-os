@@ -1,8 +1,23 @@
 [package]
-name = "aegis-initfs"
+name = "redoubt-initfs"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [[bin]]
-name = "aegis-initfs"
+name = "redoubt-initfs"
 path = "src/main.rs"
+
+[dependencies]
+redoubt-userlib = { path = "../../userlib" }
+redoubt-crypto = { path = "../../crypto" }
+
+[build-dependencies]
+redoubt-crypto = { path = "../../crypto" }
+redoubt-hello = { path = "../hello", artifact = "bin", target = "x86_64-unknown-none" }
+redoubt-shell = { path = "../shell", artifact = "bin", target = "x86_64-unknown-none" }
+redoubt-fault-test = { path = "../fault-test", artifact = "bin", target = "x86_64-unknown-none" }
+redoubt-heart = { path = "../heart", artifact = "bin", target = "x86_64-unknown-none" }
+redoubt-storaged = { path = "../storaged", artifact = "bin", target = "x86_64-unknown-none" }
+redoubt-supd = { path = "../supd", artifact = "bin", target = "x86_64-unknown-none" }
+redoubt-updated = { path = "../updated", artifact = "bin", target = "x86_64-unknown-none" }

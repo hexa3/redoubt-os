@@ -45,16 +45,3 @@ pub fn init() {
     port_out(COM1 + 2, 0xc7); // FIFO on, clear
     port_out(COM1 + 4, 0x0b); // RTS/DSR
 }
-
-#[macro_export]
-macro_rules! kprint {
-    ($($arg:tt)*) => {{
-        use core::fmt::Write;
-        let _ = write!($crate::serial::SERIAL.lock(), $($arg)*);
-    }};
-}
-
-#[macro_export]
-macro_rules! kprintln {
-    ($($arg:tt)*) => {{ $crate::kprint!("{}\n", format_args!($($arg)*)); }};
-}

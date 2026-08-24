@@ -1,17 +1,11 @@
 use x86_64::instructions::tables::load_tss;
 use x86_64::registers::segmentation::{Segment, CS, DS, ES, FS, GS, SS};
-use x86_64::structures::gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable, SegmentSelector};
+use x86_64::structures::gdt::{
+    Descriptor, DescriptorFlags, GlobalDescriptorTable, SegmentSelector,
+};
 use x86_64::structures::tss::TaskStateSegment;
-use crate::kprintln;
-use x86_64::VirtAddr;
 
 pub const DOUBLE_FAULT_IST: usize = 0;
-
-/// Per-CPU (single core here) system state.
-pub struct Gdt {
-    table: GlobalDescriptorTable,
-    pub selectors: Selectors,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Selectors {
@@ -23,7 +17,11 @@ pub struct Selectors {
 }
 
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
-pub static mut TSS_ADDR: u64 = 0;
+static TSS_ADDR_CELL: spin::Once<u64> = spin::Once::new();
+
+pub fn tss_addr() -> u64 {
+    *TSS_ADDR_CELL.get().expect("tss")
+}
 
 static GDT: spin::Once<GlobalDescriptorTable> = spin::Once::new();
 static SELECTORS: spin::Once<Selectors> = spin::Once::new();
@@ -33,9 +31,11 @@ pub fn selectors() -> &'static Selectors {
 }
 
 pub fn init() {
-    // double-fault IST stack
+    // double-fault IST stack — must be a VIRTUAL address; the physmap alias
+    // is what makes it reachable. Using the raw physical address here made
+    // every double fault triple-fault.
     let df_stack = crate::frame::alloc_frames(8).expect("frames for IST stack");
-    let df_top = VirtAddr::new(df_stack.as_u64() + 8 * 4096);
+    let df_top = crate::paging::phys_to_virt(df_stack) + 8 * 4096u64;
 
     let tss = unsafe { &mut *(&raw mut TSS) };
     tss.interrupt_stack_table[DOUBLE_FAULT_IST] = df_top;
@@ -61,11 +61,12 @@ pub fn init() {
         let ucode = table.append({
             let mut f = DescriptorFlags::USER_SEGMENT
                 | DescriptorFlags::PRESENT
+                | DescriptorFlags::EXECUTABLE
                 | DescriptorFlags::LONG_MODE;
             f.insert(DescriptorFlags::DPL_RING_3);
             Descriptor::UserSegment(f.bits())
         });
-        unsafe { TSS_ADDR = &raw const TSS as u64 };
+        TSS_ADDR_CELL.call_once(|| &raw const TSS as u64);
         let tss_sel = table.append(Descriptor::tss_segment(tss));
 
         let selectors = Selectors {

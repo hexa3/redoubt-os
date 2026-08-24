@@ -1,15 +1,16 @@
 [package]
-name = "aegis-build"
+name = "redoubt-build"
 version = "0.1.0"
 edition = "2021"
-description = "Build tool for the Aegis OS: combines kernel + user servers into a bootable disk image"
+license = "Apache-2.0"
+description = "Build tool for the redoubt OS: combines kernel + user servers into a bootable disk image"
 
 [build-dependencies]
 bootloader = { version = "0.11", default-features = false, features = ["bios"] }
-aegis-kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
+redoubt-kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
 
 [workspace]
-members = ["kernel", "servers/initfs", "servers/console"]
+members = ["crypto", "tools/agt", "kernel", "servers/initfs", "servers/console", "servers/hello", "servers/shell", "servers/fault-test", "servers/heart", "servers/storaged", "servers/supd", "servers/updated"]
 
 [profile.release]
 opt-level = 2
