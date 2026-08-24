@@ -1,0 +1,13 @@
+[package]
+name = "redoubt-crypto"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Self-contained no_std primitives powering redoubt verified images, updates, and volume encryption"
+
+[dependencies]
+spin = "0.9"
+
+[lib]
+name = "redoubt_crypto"
+path = "src/lib.rs"
