@@ -1,0 +1,13 @@
+[package]
+name = "redoubt-tools"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Host-side tooling for redoubt images: signing keys, volume provisioning, update packages"
+
+[[bin]]
+name = "redoubt-tools"
+path = "src/main.rs"
+
+[dependencies]
+redoubt-crypto = { path = "../../crypto" }
