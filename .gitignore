@@ -5,6 +5,10 @@ Cargo.lock.orig
 *.log
 dist/
 
+# Local Markdown notes and generated documentation.
+*.md
+*.MD
+
 # Local development signing material and generated captures.
 keys/dev/*.seed
 keys/dev/*.pub
