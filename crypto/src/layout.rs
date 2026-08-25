@@ -889,4 +889,33 @@ mod tests {
             AuditCheck::End
         ));
     }
+
+    /// Deterministic malformed-input campaign for every disk-facing parser.
+    /// It supplements the valid round trips above with adversarial lengths
+    /// and contents, catching bounds regressions without relying on a host
+    /// fuzzer being installed in a release build environment.
+    #[test]
+    fn malformed_disk_records_are_total() {
+        let mut state = 0x7a11_5eed_c0de_f00du64;
+        for _case in 0..4096 {
+            let mut sector = [0u8; SECTOR];
+            for byte in &mut sector {
+                // xorshift64*: cheap, deterministic, and sufficiently
+                // varied for parser boundary coverage.
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                *byte = state.wrapping_mul(0x2545_f491_4f6c_dd1d) as u8;
+            }
+            let len = (state as usize) % (SECTOR + 1);
+            let input = &sector[..len];
+            let _ = parse_superblock(input);
+            let _ = parse_config(input);
+            let _ = parse_slot_header(input);
+            let _ = parse_stage_package(input);
+            let _ = parse_app_header(input);
+            let _ = parse_app_stage_package(input);
+            let _ = check_audit_record(input, state, &[0u8; 32]);
+        }
+    }
 }
