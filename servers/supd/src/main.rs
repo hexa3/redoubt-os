@@ -424,7 +424,10 @@ fn handle_op(
             }
         }
     }
-    if req == b"install-app" || req.strip_prefix(b"remove-app ").is_some() {
+    if req == b"install-app"
+        || req.strip_prefix(b"remove-app ").is_some()
+        || req.strip_prefix(b"select-slot ").is_some()
+    {
         match config.call(msg::pack(req)) {
             Ok(w) => return msg::unpack(&w),
             Err(e) => {
