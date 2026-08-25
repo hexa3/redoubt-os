@@ -977,9 +977,7 @@ fn select_verified_slot(st: &mut State, target: layout::SlotId) -> alloc::vec::V
     // Re-read and authenticate the pointer immediately before replacing it;
     // a damaged superblock must lead to recovery, never a blind overwrite.
     let mut sb = [0u8; layout::SECTOR];
-    if !br(block, layout::SUPERBLOCK_LBA, 1, &mut sb)
-        || !layout::superblock_valid(&st.vol_key, &sb)
-    {
+    if !br(block, layout::SUPERBLOCK_LBA, 1, &mut sb) || !layout::superblock_valid(&st.vol_key, &sb) {
         return b"err: superblock".to_vec();
     }
     let Some((_previous, mut gen_a, mut gen_b)) = layout::parse_superblock(&sb) else {
