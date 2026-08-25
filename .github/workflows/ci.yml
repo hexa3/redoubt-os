@@ -40,6 +40,16 @@ jobs:
           cargo build --package redoubt-kernel --target x86_64-unknown-none --release
           ./build.sh
 
+      - name: Produce a release candidate with externally provisioned keys
+        run: |
+          cp keys/dev/redoubt.seed /tmp/redoubt-ci-release.seed
+          cp keys/dev/redoubt.pub /tmp/redoubt-ci-release.pub
+          REDOUBT_SIGNING_PREFIX=/tmp/redoubt-ci-release ./tools/release.sh .ci-release
+          test -s .ci-release/redoubt-bios.img
+          test -s .ci-release/redoubt-store.img
+          grep -q '^signing_public_key_sha256=' .ci-release/BUILD_INFO
+          sha256sum -c .ci-release/SHA256SUMS
+
       - name: Build QEMU runner
         run: docker build -f docker/Dockerfile.qemu -t redoubt-qemu .
 
