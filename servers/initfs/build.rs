@@ -14,6 +14,9 @@ use redoubt_crypto::{ed25519, sha256};
 /// and local QEMU runs exercise real verification deterministically.
 
 fn main() {
+    // A production build may use an externally provisioned key. Cargo must
+    // not reuse a manifest and pinned key compiled under a different prefix.
+    println!("cargo:rerun-if-env-changed=REDOUBT_SIGNING_PREFIX");
     let ld = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
         .parent()
         .unwrap()
