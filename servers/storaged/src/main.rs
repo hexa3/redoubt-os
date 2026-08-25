@@ -938,6 +938,72 @@ fn slot_status_text(st: &State) -> alloc::vec::Vec<u8> {
     }
 }
 
+/// Independently verify one system slot for the recovery console. This never
+/// trusts the generation recorded in the superblock: the authenticated slot
+/// header, ciphertext MAC, plaintext digest, and payload signature are all
+/// checked again before reporting the slot as bootable.
+fn inspect_slot(st: &State, slot: layout::SlotId) -> alloc::vec::Vec<u8> {
+    let mut out = alloc::vec::Vec::new();
+    out.push(if slot.num() == 1 { b'A' } else { b'B' });
+    let Some(block) = st.block else {
+        out.extend_from_slice(b" unavailable");
+        return out;
+    };
+    match validate_and_load(block, &st.vol_key, slot, &st.pubkey, workspace()) {
+        Some((_len, generation)) => {
+            out.extend_from_slice(b" valid gen ");
+            push_num(&mut out, generation);
+        }
+        None => out.extend_from_slice(b" INVALID"),
+    }
+    out
+}
+
+/// Make a *verified* slot the next boot target. This is intentionally
+/// separate from update commit: recovery may select an older valid slot, so
+/// normal monotonic-generation update rules do not apply. It only changes
+/// the authenticated superblock pointer; it never writes code or payload
+/// bytes and requires the exact `confirm` token at the API boundary.
+fn select_verified_slot(st: &mut State, target: layout::SlotId) -> alloc::vec::Vec<u8> {
+    let Some(block) = st.block else {
+        return b"err: no volume".to_vec();
+    };
+    let Some((_len, target_gen)) =
+        validate_and_load(block, &st.vol_key, target, &st.pubkey, workspace())
+    else {
+        return b"err: target INVALID".to_vec();
+    };
+
+    // Re-read and authenticate the pointer immediately before replacing it;
+    // a damaged superblock must lead to recovery, never a blind overwrite.
+    let mut sb = [0u8; layout::SECTOR];
+    if !br(block, layout::SUPERBLOCK_LBA, 1, &mut sb)
+        || !layout::superblock_valid(&st.vol_key, &sb)
+    {
+        return b"err: superblock".to_vec();
+    }
+    let Some((_previous, mut gen_a, mut gen_b)) = layout::parse_superblock(&sb) else {
+        return b"err: superblock".to_vec();
+    };
+    if target == layout::SlotId::A {
+        gen_a = target_gen;
+    } else {
+        gen_b = target_gen;
+    }
+    layout::write_superblock(&mut sb, Some(target), gen_a, gen_b, &st.vol_key);
+    if !bw(block, layout::SUPERBLOCK_LBA, 1, &sb) {
+        return b"err: pointer write".to_vec();
+    }
+
+    let mut audit = b"recovery select ".to_vec();
+    audit.push(if target.num() == 1 { b'A' } else { b'B' });
+    audit_raw(st, &audit);
+    let mut out = b"ok selected ".to_vec();
+    out.push(if target.num() == 1 { b'A' } else { b'B' });
+    out.extend_from_slice(b"; reboot");
+    out
+}
+
 // --------------------------------------------------------- update flow
 
 /// begin-update: verify + apply the staged package into the INACTIVE slot,
@@ -1154,6 +1220,12 @@ fn handle_query(st: &mut State, console: CapSlot, req: &[u8]) -> alloc::vec::Vec
     if req == b"slot" {
         return slot_status_text(st);
     }
+    if req == b"slot-a" {
+        return inspect_slot(st, layout::SlotId::A);
+    }
+    if req == b"slot-b" {
+        return inspect_slot(st, layout::SlotId::B);
+    }
     if let Some(rest) = strip_prefix(req, b"get ") {
         let key = trim(rest);
         match lookup(st, key) {
@@ -1318,6 +1390,12 @@ fn handle_config(st: &mut State, console: CapSlot, req: &[u8]) -> alloc::vec::Ve
         }
     } else if req == b"begin-update" {
         run_update(st, console)
+    } else if req == b"select-slot a confirm" {
+        select_verified_slot(st, layout::SlotId::A)
+    } else if req == b"select-slot b confirm" {
+        select_verified_slot(st, layout::SlotId::B)
+    } else if req == b"select-slot a" || req == b"select-slot b" {
+        b"err: confirmation required".to_vec()
     } else if req == b"install-app" {
         install_app(st, console)
     } else if let Some(name) = strip_prefix(req, b"remove-app ") {
