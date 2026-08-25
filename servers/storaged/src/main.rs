@@ -276,18 +276,53 @@ fn mount(st: &mut State, cap: CapSlot, console: CapSlot) {
     }
     let mut key = [0u8; 32];
     key.copy_from_slice(&sec[layout::SB_KEY_OFF..layout::SB_KEY_OFF + 32]);
-    if !layout::superblock_valid(&key, &sec) {
-        say(
-            console,
-            b"[storaged] SUPERBLOCK INTEGRITY FAILURE: RECOVERY\n",
-        );
-        return;
-    }
-    let (active_sb, gen_a, gen_b) = layout::parse_superblock(&sec).unwrap_or((None, 0, 0));
+    // Keep the candidate key even when the superblock MAC is torn. Slot
+    // validation below still requires an HMAC, plaintext digest, and pinned
+    // Ed25519 signature, so a damaged pointer does not make either slot
+    // executable by itself.
+    st.vol_key = key;
+    let parsed_sb = layout::parse_superblock(&sec);
+    let superblock_ok = parsed_sb.is_some() && layout::superblock_valid(&key, &sec);
+    let (active_sb, gen_a, gen_b) = parsed_sb.unwrap_or((None, 0, 0));
     let mut gens = [gen_a, gen_b];
 
     // ---- A/B validation with automatic rollback ----
     let mut active = active_sb;
+    if !superblock_ok {
+        // A power cut can tear only the superblock sector after a fully
+        // verified inactive slot was written. Recover deterministically from
+        // independently valid slots rather than stranding the appliance in
+        // recovery mode. Prefer the newer generation; ties retain a valid
+        // recorded target, otherwise choose A for a stable outcome.
+        let gen_a = validate_and_load(cap, &key, layout::SlotId::A, &st.pubkey, workspace())
+            .map(|(_, gen)| gen);
+        let gen_b = validate_and_load(cap, &key, layout::SlotId::B, &st.pubkey, workspace())
+            .map(|(_, gen)| gen);
+        active = match (gen_a, gen_b) {
+            (Some(a), Some(b)) if b > a => Some(layout::SlotId::B),
+            (Some(_), Some(_)) if active_sb == Some(layout::SlotId::B) => Some(layout::SlotId::B),
+            (Some(_), Some(_)) => Some(layout::SlotId::A),
+            (Some(_), None) => Some(layout::SlotId::A),
+            (None, Some(_)) => Some(layout::SlotId::B),
+            (None, None) => None,
+        };
+        gens = [gen_a.unwrap_or(0), gen_b.unwrap_or(0)];
+        let Some(recovered) = active else {
+            say(console, b"[storaged] no verifiable slot: RECOVERY mode\n");
+            scan_audit(st, cap);
+            audit_raw(st, b"superblock recovery failed");
+            return;
+        };
+        let mut repaired = [0u8; layout::SECTOR];
+        layout::write_superblock(&mut repaired, Some(recovered), gens[0], gens[1], &key);
+        if bw(cap, layout::SUPERBLOCK_LBA, 1, &repaired) {
+            scan_audit(st, cap);
+            audit_raw(st, b"superblock recovered");
+            say(console, b"[storaged] superblock recovered from slots\n");
+        } else {
+            say(console, b"[storaged] superblock repair write failed\n");
+        }
+    }
     if !slot_validates(cap, &key, active, &st.pubkey) {
         if let Some(a) = active {
             zero_header(cap, a);
