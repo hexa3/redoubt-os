@@ -213,3 +213,28 @@ jobs:
           grep -aF "[store] active invalid; rollback" .ci-rb.log
           grep -aE "mounted slot A gen" .ci-rb.log
           ! grep -aF "[redoubt][PANIC]" .ci-rb.log
+
+      - name: Recover a torn superblock from independently verified slots
+        run: |
+          cargo run -p redoubt-tools --locked --release -- updpack \
+            --image store.img --payload tools/factory-payload.txt --gen 2 --key keys/dev/redoubt
+          cp redoubt-bios.img .ci-torn-sb.img
+          cp store.img .ci-torn-sb-store.img
+          REDOUBT_IMAGE=.ci-torn-sb.img REDOUBT_VOLUME=.ci-torn-sb-store.img REDOUBT_MON_PORT=4476 \
+            ./tools/drive.sh 12 'update' > .ci-torn-sb-update.log
+          # Simulate a power cut in the final superblock-sector write. The
+          # new slot is complete but its active pointer authentication tag is
+          # torn; mount must reconstruct the pointer from signed A/B slots.
+          python3 - <<-'PY'
+          with open('.ci-torn-sb-store.img', 'r+b') as f:
+              f.seek(0x48)
+              b = f.read(1)
+              f.seek(0x48)
+              f.write(bytes([b[0] ^ 1]))
+          PY
+          REDOUBT_IMAGE=.ci-torn-sb.img REDOUBT_VOLUME=.ci-torn-sb-store.img REDOUBT_MON_PORT=4477 \
+            ./tools/drive.sh 12 'slot' > .ci-torn-sb.log
+          grep -aF '[storaged] superblock recovered' .ci-torn-sb.log
+          grep -aF 'mounted slot B gen 2' .ci-torn-sb.log
+          grep -aF 'B gen 2' .ci-torn-sb.log
+          ! grep -aF '[redoubt][PANIC]' .ci-torn-sb.log
