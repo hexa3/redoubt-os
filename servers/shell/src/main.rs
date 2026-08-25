@@ -99,6 +99,7 @@ fn execute(
         b"apps" => apps_cmd(console, query),
         b"app" => app_cmd(console, initfs, query, sup, rest),
         b"slot" => call_print(console, query, b"slot"),
+        b"recovery" => recovery_cmd(console, query, sup, rest),
         b"get" => {
             if rest.is_empty() {
                 return console.print(b"usage: get <key>\n");
@@ -160,6 +161,7 @@ fn help(console: &Console) -> bool {
         b"  apps             list installed apps",
         b"  app install; run|remove <name>",
         b"  slot             active system slot",
+        b"  recovery status|select <a|b> confirm",
         b"  get <key>        read configuration",
         b"  audit [count]    recent audit records",
         b"  uptime, stats, reboot",
@@ -172,6 +174,34 @@ fn help(console: &Console) -> bool {
         }
     }
     true
+}
+
+/// Offline recovery is deliberately narrow: it can inspect both slots and
+/// select only a slot that storaged independently verifies. A selection is
+/// staged in the authenticated superblock and takes effect after reboot.
+fn recovery_cmd(console: &Console, query: &CapSlot, sup: &CapSlot, rest: &[u8]) -> bool {
+    match rest {
+        b"status" => {
+            call_print(console, query, b"slot")
+                && call_print(console, query, b"slot-a")
+                && call_print(console, query, b"slot-b")
+        }
+        _ => {
+            let (verb, tail) = split_cmd(rest);
+            if verb != b"select" {
+                return console.print(b"usage: recovery status|select <a|b> confirm\n");
+            }
+            let (slot, confirmation) = split_cmd(tail);
+            if (slot != b"a" && slot != b"b") || confirmation.is_empty() {
+                return console.print(b"usage: recovery select <a|b> confirm\n");
+            }
+            let mut req = b"select-slot ".to_vec();
+            req.extend_from_slice(slot);
+            req.push(b' ');
+            req.extend_from_slice(confirmation);
+            call_print(console, sup, &req)
+        }
+    }
 }
 
 fn apps_cmd(console: &Console, query: &CapSlot) -> bool {
