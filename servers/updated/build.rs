@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=REDOUBT_SIGNING_PREFIX");
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let key_prefix = std::env::var_os("REDOUBT_SIGNING_PREFIX")
         .map(PathBuf::from)
