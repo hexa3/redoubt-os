@@ -107,6 +107,28 @@ jobs:
           grep -aF "mounted slot B gen 2" .ci-upd.log
           ! grep -aF "[redoubt][PANIC]" .ci-upd.log
 
+      - name: Recover by explicitly selecting a verified prior slot
+        run: |
+          cp redoubt-bios.img .ci-recovery.img
+          cp store.img .ci-recovery-store.img
+          cargo run -p redoubt-tools --locked --release -- updpack \
+            --image .ci-recovery-store.img --payload tools/factory-payload.txt --gen 2 \
+            --key keys/dev/redoubt
+          # Install a verified B slot, then use the offline console to make
+          # the independently verified A slot the next boot target.
+          REDOUBT_IMAGE=.ci-recovery.img REDOUBT_VOLUME=.ci-recovery-store.img REDOUBT_MON_PORT=4473 \
+            ./tools/drive.sh 12 'update' > .ci-recovery-update.log
+          REDOUBT_IMAGE=.ci-recovery.img REDOUBT_VOLUME=.ci-recovery-store.img REDOUBT_MON_PORT=4474 \
+            ./tools/drive.sh 12 'recovery status' 'recovery select a confirm' > .ci-recovery-select.log
+          grep -aF 'A valid gen 1' .ci-recovery-select.log
+          grep -aF 'B valid gen 2' .ci-recovery-select.log
+          grep -aF 'ok selected A; reboot' .ci-recovery-select.log
+          REDOUBT_IMAGE=.ci-recovery.img REDOUBT_VOLUME=.ci-recovery-store.img REDOUBT_MON_PORT=4475 \
+            ./tools/drive.sh 12 'slot' > .ci-recovery-boot.log
+          grep -aF 'mounted slot A gen 1' .ci-recovery-boot.log
+          grep -aF 'A gen 1' .ci-recovery-boot.log
+          ! grep -aF '[redoubt][PANIC]' .ci-recovery-boot.log
+
       - name: Reject a tampered package without touching the running slot
         run: |
           cargo run -p redoubt-tools --locked --release -- updpack \
