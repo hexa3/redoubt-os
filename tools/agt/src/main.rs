@@ -154,6 +154,13 @@ fn load_key(prefix: &str) -> Result<[u8; 32], String> {
         .map_err(|e| format!("read {}: {e}", seed_path.display()))?;
     let mut seed = [0u8; 32];
     let raw = hex_decode(text.trim())?;
+    if raw.len() != seed.len() {
+        return Err(format!(
+            "{}: expected a 32-byte Ed25519 seed, got {} bytes",
+            seed_path.display(),
+            raw.len()
+        ));
+    }
     seed.copy_from_slice(&raw);
     Ok(seed)
 }
