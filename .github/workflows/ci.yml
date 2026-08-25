@@ -49,6 +49,9 @@ jobs:
           test -s .ci-release/redoubt-store.img
           grep -q '^signing_public_key_sha256=' .ci-release/BUILD_INFO
           sha256sum -c .ci-release/SHA256SUMS
+          # The integration volume is signed by the disposable development
+          # key, so restore the matching image before QEMU scenarios.
+          ./build.sh
 
       - name: Build QEMU runner
         run: docker build -f docker/Dockerfile.qemu -t redoubt-qemu .
