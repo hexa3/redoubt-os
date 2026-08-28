@@ -18,3 +18,4 @@ redoubt-console = { path = "../servers/console", artifact = "bin", target = "x86
 [[bin]]
 name = "redoubt-kernel"
 path = "src/main.rs"
+test = false

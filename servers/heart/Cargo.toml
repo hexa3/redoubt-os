@@ -7,6 +7,7 @@ license = "Apache-2.0"
 [[bin]]
 name = "redoubt-heart"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 redoubt-userlib = { path = "../../userlib" }

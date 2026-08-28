@@ -7,3 +7,7 @@ license = "Apache-2.0"
 [lib]
 name = "redoubt_userlib"
 path = "src/lib.rs"
+# This is the runtime linked into freestanding user programs.  It defines
+# `_start` and `panic_impl`, so a host test harness cannot link it.
+test = false
+doctest = false
