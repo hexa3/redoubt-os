@@ -94,40 +94,71 @@ impl Volume {
     }
 
     fn create(path: &Path, sectors: u64) -> Result<Volume, String> {
+        if sectors == 0 {
+            return Err("volume must contain at least one sector".into());
+        }
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
         let f = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
-            .truncate(false)
+            .create_new(true)
             .open(path)
             .map_err(|e| format!("create {}: {e}", path.display()))?;
         // grow to exactly sectors * 512 bytes
-        let end = sectors * layout::SECTOR as u64;
+        let end = sectors
+            .checked_mul(layout::SECTOR as u64)
+            .ok_or("volume size overflow")?;
         (&f).seek(SeekFrom::Start(end.saturating_sub(1)))
             .and_then(|_| Write::write_all(&mut &f, &[0]))
             .map_err(|e| format!("size {}: {e}", path.display()))?;
         Ok(Volume { file: f, sectors })
     }
 
-    fn read_lba(&mut self, lba: u64, count: u64, buf: &mut [u8]) -> Result<(), String> {
-        assert_eq!(buf.len(), (count * layout::SECTOR as u64) as usize);
-        if lba + count > self.sectors {
-            return Err(format!("read past end of volume: lba {lba}"));
+    fn lba_offset(&self, lba: u64, count: u64) -> Result<u64, String> {
+        let end = lba
+            .checked_add(count)
+            .ok_or_else(|| format!("LBA range overflow: {lba}+{count}"))?;
+        if end > self.sectors {
+            return Err(format!("access past end of volume: lba {lba}"));
         }
+        lba.checked_mul(layout::SECTOR as u64)
+            .ok_or_else(|| format!("LBA offset overflow: {lba}"))
+    }
+
+    fn read_lba(&mut self, lba: u64, count: u64, buf: &mut [u8]) -> Result<(), String> {
+        let bytes = usize::try_from(
+            count
+                .checked_mul(layout::SECTOR as u64)
+                .ok_or("read length overflow")?,
+        )
+        .map_err(|_| "read length does not fit host address space")?;
+        if buf.len() != bytes {
+            return Err(format!(
+                "read buffer is {} bytes; expected {bytes}",
+                buf.len()
+            ));
+        }
+        let offset = self.lba_offset(lba, count)?;
         self.file
-            .seek(SeekFrom::Start(lba * layout::SECTOR as u64))
+            .seek(SeekFrom::Start(offset))
             .and_then(|_| self.file.read_exact(buf))
             .map_err(|e| format!("read lba {lba}: {e}"))
     }
 
     fn write_lba(&mut self, lba: u64, buf: &[u8]) -> Result<(), String> {
-        assert_eq!(buf.len() % layout::SECTOR, 0);
-        let count = (buf.len() / layout::SECTOR) as u64;
-        if lba + count > self.sectors {
-            return Err(format!("write past end of volume: lba {lba}"));
+        if buf.len() % layout::SECTOR != 0 {
+            return Err(format!(
+                "write buffer is not {}-byte aligned",
+                layout::SECTOR
+            ));
         }
+        let count = (buf.len() / layout::SECTOR) as u64;
+        let offset = self.lba_offset(lba, count)?;
         self.file
-            .seek(SeekFrom::Start(lba * layout::SECTOR as u64))
+            .seek(SeekFrom::Start(offset))
             .and_then(|_| self.file.write_all(buf))
             .map_err(|e| format!("write lba {lba}: {e}"))
     }
@@ -218,9 +249,22 @@ fn cmd_keygen(args: &[String]) -> Result<(), String> {
 fn cmd_mkvol(args: &[String]) -> Result<(), String> {
     let image = arg_of(args, "--image").ok_or("mkvol needs --image")?;
     let key_prefix = arg_of(args, "--key").unwrap_or_else(|| "keys/redoubt-dev".into());
-    let size_mb: u64 = arg_of(args, "--size-mb")
-        .map(|s| s.parse().map_err(|_| "bad --size-mb").unwrap_or(16))
-        .unwrap_or(16);
+    let size_mb: u64 = match arg_of(args, "--size-mb") {
+        Some(s) => s.parse().map_err(|_| "bad --size-mb")?,
+        None => 16,
+    };
+    let sectors = size_mb
+        .checked_mul(1024 * 1024)
+        .ok_or("--size-mb overflow")?
+        / layout::SECTOR as u64;
+    // The staging region has the highest allocated LBA, so its end is the
+    // minimum geometry required before formatting starts.
+    let min_sectors = layout::STAGING_LBA + layout::STAGING_SECTORS;
+    if sectors < min_sectors {
+        return Err(format!(
+            "volume is too small: {sectors} sectors; need at least {min_sectors}"
+        ));
+    }
 
     let path = PathBuf::from(&image);
     let mut vol = if path.exists() {
@@ -233,8 +277,14 @@ fn cmd_mkvol(args: &[String]) -> Result<(), String> {
         }
         v
     } else {
-        Volume::create(&path, size_mb * 1024 * 1024 / layout::SECTOR as u64)?
+        Volume::create(&path, sectors)?
     };
+    if vol.sectors < min_sectors {
+        return Err(format!(
+            "{image} is too small: {} sectors; need at least {min_sectors}",
+            vol.sectors
+        ));
+    }
 
     let seed = load_key(&key_prefix)?;
     let signature_holder = seed; // naming clarity below
