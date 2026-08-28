@@ -169,6 +169,18 @@ fn load_key(prefix: &str) -> Result<[u8; 32], String> {
 
 fn cmd_keygen(args: &[String]) -> Result<(), String> {
     let out = arg_of(args, "--out").ok_or("keygen needs --out <prefix>")?;
+    let prefix = PathBuf::from(&out);
+    if let Some(parent) = prefix.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    let seed_path = PathBuf::from(format!("{out}.seed"));
+    let pub_path = PathBuf::from(format!("{out}.pub"));
+    if seed_path.exists() || pub_path.exists() {
+        return Err(format!(
+            "refusing to overwrite existing key material at {}",
+            prefix.display()
+        ));
+    }
     let seed: [u8; 32] = std::fs::File::open("/dev/urandom")
         .and_then(|mut f| {
             let mut b = [0u8; 32];
@@ -177,8 +189,22 @@ fn cmd_keygen(args: &[String]) -> Result<(), String> {
         })
         .map_err(|e| format!("entropy: {e}"))?;
     let public = ed25519::public_from_seed(&seed);
-    std::fs::write(format!("{out}.seed"), hex_encode(&seed) + "\n").map_err(|e| e.to_string())?;
-    std::fs::write(format!("{out}.pub"), hex_encode(&public) + "\n").map_err(|e| e.to_string())?;
+    let mut seed_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&seed_path)
+        .map_err(|e| format!("create {}: {e}", seed_path.display()))?;
+    seed_file
+        .write_all((hex_encode(&seed) + "\n").as_bytes())
+        .map_err(|e| format!("write {}: {e}", seed_path.display()))?;
+    let mut pub_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pub_path)
+        .map_err(|e| format!("create {}: {e}", pub_path.display()))?;
+    pub_file
+        .write_all((hex_encode(&public) + "\n").as_bytes())
+        .map_err(|e| format!("write {}: {e}", pub_path.display()))?;
     println!(
         "wrote {}.seed (keep private) and {}.pub",
         Path::new(&out).display(),
