@@ -294,10 +294,26 @@ pub fn spawn(elf: &[u8], grants: &[(CapSlot, u64)]) -> Result<u64, u64> {
     }
 }
 
-/// Block until a child task exits; reaps it.
+/// Block until any child task exits; reaps it.
 /// Returns (child_tid, exit_code) or errno (6 = no children).
 pub fn wait() -> Result<(u64, u64), u64> {
     let r = unsafe { sys::raw_full(sys::SYS_WAIT, 0, 0, 0, 0, 0, 0) };
+    if r.rax == 0 {
+        Ok((r.a0, r.a1))
+    } else {
+        Err(r.rax)
+    }
+}
+
+/// Block until this exact direct child exits, then reap it.
+///
+/// This keeps a transient command from consuming a long-lived sibling's
+/// exit notification when its parent owns several children.
+pub fn wait_for(tid: u64) -> Result<(u64, u64), u64> {
+    if tid == 0 {
+        return Err(5); // E_BAD_ARG: task id zero is reserved for wait-any.
+    }
+    let r = unsafe { sys::raw_full(sys::SYS_WAIT, 0, tid, 0, 0, 0, 0) };
     if r.rax == 0 {
         Ok((r.a0, r.a1))
     } else {

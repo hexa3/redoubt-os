@@ -156,7 +156,9 @@ impl Drive {
     }
 
     fn flush(&self) -> Result<(), AtaError> {
-        self.p_out(7, 0xE7); // CACHE FLUSH EXT
+        // 0xEA is CACHE FLUSH EXT. 0xE7 is the legacy 28-bit command;
+        // QEMU accepts both, but real LBA48 media require the EXT opcode.
+        self.p_out(7, 0xEA);
         self.wait_not_busy()?;
         if self.p_in(7) & SR_ERR != 0 {
             return Err(AtaError::DeviceError);

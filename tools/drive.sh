@@ -21,6 +21,18 @@ if [ ! -f "$IMAGE" ]; then
     exit 2
 fi
 
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    echo "error: tools/drive.sh requires a working Docker daemon" >&2
+    exit 2
+fi
+
+# Match run-qemu.sh's fresh-checkout behavior.  The driver needs a monitor,
+# so it uses the container image directly rather than delegating to that
+# script; ensure the image is available before starting a session.
+if ! docker image inspect redoubt-qemu >/dev/null 2>&1; then
+    docker build -f docker/Dockerfile.qemu -t redoubt-qemu . >/dev/null
+fi
+
 # Reboot scenarios must let QEMU reset instead of exiting.
 REBOOT_FLAG="-no-reboot"
 if [[ "${REDOUBT_REBOOT_OK:-0}" = "1" ]]; then

@@ -121,7 +121,7 @@ pub fn dispatch(frame_ptr: *mut TrapFrame) -> *mut TrapFrame {
             sys_task_spawn(frame, tid, a);
             frame_ptr
         }
-        num::WAIT => sys_wait(tid, frame_ptr, a[0]),
+        num::WAIT => sys_wait(tid, frame_ptr, a[0], a[1]),
         num::INPUT_READ => sys_input_read(tid, frame_ptr, a),
         num::TICKS => {
             frame.rax = crate::interrupts::ticks();
@@ -339,7 +339,9 @@ fn terminate_lifecycle(tid: usize, code: u64) {
         let fate = match parent {
             Some(pid) => match ts.iter().find(|t| t.id == pid) {
                 Some(p) => match p.state {
-                    TaskState::BlockedWait => Fate::Deliver(pid),
+                    TaskState::BlockedWait { child } if child.is_none() || child == Some(tid) => {
+                        Fate::Deliver(pid)
+                    }
                     _ => Fate::Linger,
                 },
                 None => Fate::Orphan,
@@ -506,15 +508,26 @@ fn sys_input_read(tid: usize, frame_ptr: *mut TrapFrame, a: [u64; 6]) -> *mut Tr
     }
 }
 
-/// sys_wait(flags): block until a child exits; returns (child_tid, code).
+/// sys_wait(flags, child): block until a child exits; returns (child_tid, code).
 ///   flags & WAIT_NOHANG -> return E_WOULD_BLOCK instead of parking
+///   child == 0           -> wait for any child (legacy/default)
+///   child != 0           -> wait only for that direct child
 ///   success             -> rax=E_OK, rdi=tid, rsi=code
-///   no children at all  -> rax=E_NO_CHILDREN
-fn sys_wait(tid: usize, frame_ptr: *mut TrapFrame, flags: u64) -> *mut TrapFrame {
+///   no matching child   -> rax=E_NO_CHILDREN
+fn sys_wait(tid: usize, frame_ptr: *mut TrapFrame, flags: u64, child: u64) -> *mut TrapFrame {
+    let wanted = match usize::try_from(child) {
+        Ok(0) => None,
+        Ok(id) => Some(id),
+        Err(_) => {
+            let f = unsafe { &mut *frame_ptr };
+            f.rax = E_NO_CHILDREN;
+            return frame_ptr;
+        }
+    };
     // already-exited child? reap it inline right now.
     let zombie = task::with_tasks(|ts| {
         ts.iter()
-            .filter(|t| t.parent == Some(tid))
+            .filter(|t| t.parent == Some(tid) && wanted.is_none_or(|id| t.id == id))
             .find(|t| matches!(t.state, TaskState::Zombie { .. }))
             .map(|t| t.id)
     });
@@ -529,8 +542,11 @@ fn sys_wait(tid: usize, frame_ptr: *mut TrapFrame, flags: u64) -> *mut TrapFrame
 
     // living children? block until one exits.
     let has_living = task::with_tasks(|ts| {
-        ts.iter()
-            .any(|t| t.parent == Some(tid) && !matches!(t.state, TaskState::Zombie { .. }))
+        ts.iter().any(|t| {
+            t.parent == Some(tid)
+                && wanted.is_none_or(|id| t.id == id)
+                && !matches!(t.state, TaskState::Zombie { .. })
+        })
     });
     if !has_living {
         let f = unsafe { &mut *frame_ptr };
@@ -546,7 +562,7 @@ fn sys_wait(tid: usize, frame_ptr: *mut TrapFrame, flags: u64) -> *mut TrapFrame
     task::with_tasks(|ts| {
         let t = ts.iter_mut().find(|t| t.id == tid).unwrap();
         t.saved_rsp = frame_ptr as u64;
-        t.state = TaskState::BlockedWait;
+        t.state = TaskState::BlockedWait { child: wanted };
     });
     sched::set_current(None);
     match sched::pick_next(None) {
@@ -1158,7 +1174,14 @@ fn check_block_cap(
 fn block_io(frame_ptr: *mut TrapFrame, tid: usize, a: [u64; 6], write: bool) -> *mut TrapFrame {
     let slot = a[0];
     let rel_lba = a[1];
-    let count = a[2] as u16;
+    let count = match u16::try_from(a[2]) {
+        Ok(count) => count,
+        Err(_) => {
+            let f = unsafe { &mut *frame_ptr };
+            f.rax = E_BAD_ARG;
+            return frame_ptr;
+        }
+    };
     let buf = a[3];
 
     if count == 0 || count > MAX_BLOCK_SECTORS {

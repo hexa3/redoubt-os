@@ -55,8 +55,11 @@ pub enum TaskState {
         endpoint: u64,
         deadline: u64,
     },
-    /// Blocked in sys_wait waiting for a child to exit.
-    BlockedWait,
+    /// Blocked in sys_wait waiting for any child (`None`) or one particular
+    /// child. A targeted wait must not be completed by an unrelated service.
+    BlockedWait {
+        child: Option<usize>,
+    },
     /// Blocked in sys_input_read waiting for keyboard bytes.
     BlockedInput,
     /// Blocked in sys_sleep until the absolute tick deadline.

@@ -383,7 +383,7 @@ fn run_program(name: &[u8], console: CapSlot) -> alloc::vec::Vec<u8> {
         return out;
     };
     match redoubt_userlib::spawn(elf, &[(console, redoubt_userlib::R_WRITE)]) {
-        Ok(tid) => match redoubt_userlib::wait() {
+        Ok(tid) => match redoubt_userlib::wait_for(tid) {
             Ok((done_tid, code)) if done_tid == tid => {
                 let mut out = b"ok: '".to_vec();
                 out.extend_from_slice(name);
@@ -468,7 +468,7 @@ fn run_installed_app(name: &[u8], console: CapSlot, info: CapSlot) -> alloc::vec
         return b"err: app signature".to_vec();
     }
     match redoubt_userlib::spawn(&elf, &[(console, redoubt_userlib::R_WRITE)]) {
-        Ok(tid) => match redoubt_userlib::wait() {
+        Ok(tid) => match redoubt_userlib::wait_for(tid) {
             Ok((done, code)) if done == tid => {
                 let mut out = b"ok app '".to_vec();
                 out.extend_from_slice(name);
