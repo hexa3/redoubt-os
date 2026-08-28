@@ -564,8 +564,23 @@ unsafe impl core::alloc::GlobalAlloc for BumpAlloc {
         let base = core::ptr::addr_of!(HEAP) as *const u8 as usize;
         let mut head = self.head.load(core::sync::atomic::Ordering::Relaxed);
         loop {
-            let aligned = (base + head + layout.align() - 1) & !(layout.align() - 1);
-            let next = aligned + layout.size() - base;
+            // A request with a giant alignment or size must fail cleanly,
+            // never wrap into a small in-bounds-looking offset and hand out
+            // overlapping memory from the fixed arena.
+            let Some(start) = base.checked_add(head) else {
+                return core::ptr::null_mut();
+            };
+            let align_mask = layout.align() - 1;
+            let Some(padded) = start.checked_add(align_mask) else {
+                return core::ptr::null_mut();
+            };
+            let aligned = padded & !align_mask;
+            let Some(end) = aligned.checked_add(layout.size()) else {
+                return core::ptr::null_mut();
+            };
+            let Some(next) = end.checked_sub(base) else {
+                return core::ptr::null_mut();
+            };
             if next > HEAP_SIZE {
                 return core::ptr::null_mut();
             }
