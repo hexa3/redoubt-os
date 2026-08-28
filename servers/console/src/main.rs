@@ -25,28 +25,95 @@ use redoubt_userlib::{sys, CapSlot};
 const SOH: u8 = 0x01;
 /// Longest line the editor will accept before silently refusing more.
 const LINE_MAX: usize = 72;
+const HISTORY_MAX: usize = 16;
+const KEY_UP: u8 = 0x80;
+const KEY_DOWN: u8 = 0x81;
 
 #[derive(Default)]
 struct Editor {
     line: alloc::vec::Vec<u8>,
     /// Complete lines typed ahead of any reader.
     ready: alloc::vec::Vec<alloc::vec::Vec<u8>>,
+    history: alloc::vec::Vec<alloc::vec::Vec<u8>>,
+    /// Selected history item, if the operator is browsing one.
+    history_pos: Option<usize>,
 }
 
 impl Editor {
+    fn replace_line(&mut self, next: &[u8]) {
+        for _ in 0..self.line.len() {
+            sys::debug_write_raw(b"\x08 \x08");
+        }
+        self.line.clear();
+        self.line.extend_from_slice(next);
+        sys::debug_write_raw(next);
+    }
+
+    fn history_up(&mut self) {
+        let Some(last) = self.history.len().checked_sub(1) else {
+            return;
+        };
+        let pos = self.history_pos.map_or(last, |p| p.saturating_sub(1));
+        self.history_pos = Some(pos);
+        let line = self.history[pos].clone();
+        self.replace_line(&line);
+    }
+
+    fn history_down(&mut self) {
+        let Some(pos) = self.history_pos else {
+            return;
+        };
+        if pos + 1 < self.history.len() {
+            let next = pos + 1;
+            self.history_pos = Some(next);
+            let line = self.history[next].clone();
+            self.replace_line(&line);
+        } else {
+            self.history_pos = None;
+            self.replace_line(b"");
+        }
+    }
+
+    fn remember(&mut self, line: &[u8]) {
+        self.history_pos = None;
+        if line.is_empty() || self.history.last().is_some_and(|last| last == line) {
+            return;
+        }
+        if self.history.len() == HISTORY_MAX {
+            self.history.remove(0);
+        }
+        self.history.push(line.to_vec());
+    }
+
     /// Feed one decoded byte; echoes as it goes. Returns Some(line) when
     /// this byte terminated a line.
     fn feed(&mut self, b: u8) -> Option<alloc::vec::Vec<u8>> {
         match b {
             0x08 | 0x7f => {
+                self.history_pos = None;
                 if self.line.pop().is_some() {
                     sys::debug_write_raw(b"\x08 \x08");
                 }
                 None
             }
+            0x15 => {
+                // Ctrl-U: erase the whole editable line.
+                self.history_pos = None;
+                self.replace_line(b"");
+                None
+            }
+            0x03 => {
+                // Ctrl-C: visibly cancel and return an empty line so the
+                // waiting shell immediately redraws its prompt.
+                self.history_pos = None;
+                self.line.clear();
+                sys::debug_write_raw(b"^C\n");
+                Some(alloc::vec::Vec::new())
+            }
             b'\n' | b'\r' => {
                 sys::debug_write_raw(b"\n");
                 let done = mem::replace(&mut self.line, alloc::vec::Vec::new());
+                self.history_pos = None;
                 if done.is_empty() {
                     None // stray enter; nothing to deliver
                 } else {
@@ -54,6 +121,7 @@ impl Editor {
                 }
             }
             0x20..=0x7e => {
+                self.history_pos = None;
                 if self.line.len() < LINE_MAX {
                     self.line.push(b);
                     sys::debug_write_raw(&[b]);
@@ -125,8 +193,16 @@ fn main() -> ! {
                 Ok(0) => break,
                 Ok(n) => {
                     for &b in &kbuf[..n] {
-                        if let Some(done) = ed.feed(b) {
-                            ed.ready.push(done);
+                        match b {
+                            KEY_UP => ed.history_up(),
+                            KEY_DOWN => ed.history_down(),
+                            _ => {}
+                        }
+                        if b != KEY_UP && b != KEY_DOWN {
+                            if let Some(done) = ed.feed(b) {
+                                ed.remember(&done);
+                                ed.ready.push(done);
+                            }
                         }
                     }
                 }

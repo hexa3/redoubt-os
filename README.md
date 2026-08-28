@@ -36,7 +36,9 @@ The first build creates a disposable development signing key under
 Subsequent builds preserve the volume so audit history and updates survive.
 
 At the shell, use `help`; useful commands include `hello`, `services`,
-`stats`, `audit`, `slot`, `update`, and `exec fault-test`.
+`stats`, `audit`, `slot`, `update`, and `exec fault-test`. The editor keeps
+the last 16 commands: use Up/Down to browse, Ctrl-U to erase the current
+line, and Ctrl-C to cancel it.
 
 ## Validation
 

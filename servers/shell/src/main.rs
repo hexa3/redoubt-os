@@ -164,6 +164,7 @@ fn help(console: &Console) -> bool {
         b"  recovery status|select <a|b> confirm",
         b"  get <key>        read configuration",
         b"  audit [count]    recent audit records",
+        b"  editor: up/down, Ctrl-U, Ctrl-C",
         b"  uptime, stats, reboot",
     ] {
         let mut m = alloc::vec![SOH];

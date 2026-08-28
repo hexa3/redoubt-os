@@ -13,7 +13,13 @@ const QUEUE_CAP: usize = 256;
 
 static QUEUE: spin::Mutex<VecDeque<u8>> = spin::Mutex::new(VecDeque::new());
 static SHIFT: AtomicBool = AtomicBool::new(false);
+static CTRL: AtomicBool = AtomicBool::new(false);
 static EXTENDED: AtomicBool = AtomicBool::new(false);
+
+// Private decoded key values. They are control bytes outside the printable
+// terminal range and are consumed by the console editor before shell input.
+const KEY_UP: u8 = 0x80;
+const KEY_DOWN: u8 = 0x81;
 
 /// A task parked in SYS_INPUT_READ with its destination buffer.
 struct Waiter {
@@ -90,6 +96,9 @@ fn decode(sc: u8) -> Option<u8> {
         0x39 => b' ',
         _ => return None,
     };
+    if CTRL.load(Ordering::Relaxed) && c.is_ascii_alphabetic() {
+        return Some(c & 0x1f); // ASCII C0 controls: Ctrl-C, Ctrl-U, …
+    }
     Some(if sh { unshift(c) } else { c })
 }
 
@@ -123,13 +132,21 @@ fn unshift(c: u8) -> u8 {
 
 /// Entry point from the IRQ1 handler with one raw scancode byte.
 pub fn on_scancode(sc: u8) {
-    // extended-key prefix: swallow the prefix and the following byte
+    // Extended set-1 keys carry an E0 prefix. Preserve the two editor keys
+    // people expect from a shell instead of dropping all extended input.
     if sc == 0xe0 {
         EXTENDED.store(true, Ordering::Relaxed);
         return;
     }
     if EXTENDED.swap(false, Ordering::Relaxed) {
-        return; // ignore arrows/numpad-enter/etc. wholesale
+        if sc & 0x80 == 0 {
+            match sc {
+                0x48 => enqueue(KEY_UP),
+                0x50 => enqueue(KEY_DOWN),
+                _ => {}
+            }
+        }
+        return;
     }
 
     if sc == 0x2a || sc == 0x36 {
@@ -138,6 +155,14 @@ pub fn on_scancode(sc: u8) {
     }
     if sc == 0xaa || sc == 0xb6 {
         SHIFT.store(false, Ordering::Relaxed);
+        return;
+    }
+    if sc == 0x1d {
+        CTRL.store(true, Ordering::Relaxed);
+        return;
+    }
+    if sc == 0x9d {
+        CTRL.store(false, Ordering::Relaxed);
         return;
     }
 
