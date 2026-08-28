@@ -5,6 +5,7 @@ starts isolated userspace servers for the console, verified program store,
 encrypted persistent storage, service supervision, and signed updates.
 
 The resulting BIOS image boots directly in QEMU into an interactive shell.
+See [platform support](PLATFORMS.md) before selecting hardware.
 
 ## What is implemented
 
