@@ -67,8 +67,23 @@ trap cleanup EXIT
 
 sleep "$WAIT"
 
+open_monitor() {
+    # QEMU can reach its serial boot markers before the TCP monitor starts
+    # accepting connections, especially under Docker without KVM. Retry for
+    # a bounded interval instead of treating that small race as a failed OS.
+    local attempt
+    for ((attempt = 0; attempt < 50; attempt++)); do
+        if { exec 3<>"/dev/tcp/127.0.0.1/${MON_PORT}"; } 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    echo "QEMU monitor did not become ready on port ${MON_PORT}" >&2
+    return 1
+}
+
 mon() {
-    exec 3<>/dev/tcp/127.0.0.1/${MON_PORT}
+    open_monitor
     printf '%s\n' "$1" >&3
     sleep 0.15
     exec 3<&- 3>&-
@@ -102,7 +117,7 @@ done
 sleep "${REDOUBT_POST_WAIT:-2}"
 
 # capture final state: screenshot via monitor screendump
-exec 3<>/dev/tcp/127.0.0.1/${MON_PORT}
+open_monitor
 read -t 1 -u 3 banner || true
 printf 'screendump %s.ppm\n' "$SHOT_PREFIX" >&3
 sleep 1
