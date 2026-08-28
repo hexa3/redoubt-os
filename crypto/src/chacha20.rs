@@ -77,8 +77,8 @@ mod tests {
 
     fn key() -> [u8; KEY_LEN] {
         let mut k = [0u8; 32];
-        for i in 0..32 {
-            k[i] = i as u8;
+        for (i, byte) in k.iter_mut().enumerate() {
+            *byte = i as u8;
         }
         k
     }

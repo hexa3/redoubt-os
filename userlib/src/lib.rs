@@ -42,6 +42,12 @@ pub mod sys {
     }
 
     /// Number in rax; args in rdi,rsi,rdx,r10,r8,r9 (all six).
+    ///
+    /// # Safety
+    ///
+    /// This issues an unrestricted kernel syscall. Callers must satisfy the
+    /// selected syscall's pointer, capability, and lifetime contract; use
+    /// the typed wrappers in this module whenever one exists.
     #[inline]
     pub unsafe fn raw_full(n: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> Ret {
         use core::arch::asm;
@@ -524,6 +530,9 @@ pub fn block_write(cap: CapSlot, lba: u64, count: u16, buf: &[u8]) -> Result<(),
     }
 }
 
+// Host-side unit tests link `std`, which already supplies `panic_impl`.
+// Freestanding user images retain the runtime panic handler.
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Best-effort: report then die. No unwinding in a no_std world.

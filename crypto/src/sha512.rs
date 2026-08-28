@@ -204,9 +204,15 @@ impl Sha512 {
             a = t1.wrapping_add(t2);
         }
         let rounds = [a, b, c, d, e, f, g, h];
-        for i in 0..8 {
-            self.state[i] = self.state[i].wrapping_add(rounds[i]);
+        for (state, round) in self.state.iter_mut().zip(rounds) {
+            *state = state.wrapping_add(round);
         }
+    }
+}
+
+impl Default for Sha512 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -254,8 +260,8 @@ mod tests {
         // If SHA-512 is wrong, RFC 8032 vector 1 cannot reproduce.
         let seed = {
             let mut s = [0u8; 32];
-            for i in 0..32 {
-                s[i] = u8::from_str_radix(
+            for (i, byte) in s.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(
                     &"9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
                         [i * 2..i * 2 + 2],
                     16,
@@ -266,8 +272,8 @@ mod tests {
         };
         let expect = {
             let mut p = [0u8; 32];
-            for i in 0..32 {
-                p[i] = u8::from_str_radix(
+            for (i, byte) in p.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(
                     &"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
                         [i * 2..i * 2 + 2],
                     16,

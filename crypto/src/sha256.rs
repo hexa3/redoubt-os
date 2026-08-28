@@ -129,9 +129,15 @@ impl Sha256 {
             a = t1.wrapping_add(t2);
         }
         let rounds = [a, b, c, d, e, f, g, h];
-        for i in 0..8 {
-            self.state[i] = self.state[i].wrapping_add(rounds[i]);
+        for (state, round) in self.state.iter_mut().zip(rounds) {
+            *state = state.wrapping_add(round);
         }
+    }
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

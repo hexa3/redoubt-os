@@ -133,8 +133,8 @@ impl Fe {
 
     fn add(self, rhs: Fe) -> Fe {
         let mut r = [0u64; 5];
-        for i in 0..5 {
-            r[i] = self.0[i] + rhs.0[i];
+        for ((out, lhs), rhs) in r.iter_mut().zip(self.0).zip(rhs.0) {
+            *out = lhs + rhs;
         }
         Fe(r).weak_reduce()
     }
@@ -260,14 +260,14 @@ fn exp_p_minus(k: u64) -> [u8; 32] {
     e[31] = 0x7f;
     // subtract k from the little-endian number
     let mut borrow = k;
-    for i in 0..32 {
-        let cur = e[i] as u32;
+    for byte in &mut e {
+        let cur = *byte as u32;
         let sub = (borrow & 0xff) as u32;
         if cur >= sub {
-            e[i] = (cur - sub) as u8;
+            *byte = (cur - sub) as u8;
             borrow >>= 8;
         } else {
-            e[i] = (cur + 256 - sub) as u8;
+            *byte = (cur + 256 - sub) as u8;
             borrow = (borrow >> 8) + 1;
         }
         if borrow == 0 {
