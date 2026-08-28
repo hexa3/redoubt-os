@@ -1,32 +1,240 @@
-name: validate
+name: redoubt CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  boot-smoke:
-    name: Host checks and QEMU boot
+  crypto-vectors:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: RFC test vectors (SHA/HMAC/ChaCha20/Ed25519)
+        run: cargo test -p redoubt-crypto --locked
+
+  build-and-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install the freestanding Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          components: llvm-tools-preview,rust-src
           targets: x86_64-unknown-none
+          components: rust-src, llvm-tools-preview
 
-      - name: Install QEMU
+      - name: Enforce Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Generate disposable development signing keys
+        run: cargo run --package redoubt-tools -- keygen --out keys/dev/redoubt
+
+      - name: Build kernel, image, tools, and development volume
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes qemu-system-x86
+          cargo build --package redoubt-kernel --target x86_64-unknown-none --release
+          ./build.sh
 
-      - name: Validate bootable image
-        env:
-          REDOUBT_BOOT_TIMEOUT: 25s
-        run: ./tools/check.sh
+      - name: Produce a release candidate with externally provisioned keys
+        run: |
+          cp keys/dev/redoubt.seed /tmp/redoubt-ci-release.seed
+          cp keys/dev/redoubt.pub /tmp/redoubt-ci-release.pub
+          REDOUBT_SIGNING_PREFIX=/tmp/redoubt-ci-release ./tools/release.sh .ci-release
+          test -s .ci-release/redoubt-bios.img
+          test -s .ci-release/redoubt-store.img
+          grep -q '^signing_public_key_sha256=' .ci-release/BUILD_INFO
+          sha256sum -c .ci-release/SHA256SUMS
+          # The integration volume is signed by the disposable development
+          # key, so restore the matching image before QEMU scenarios.
+          ./build.sh
+
+      - name: Build QEMU runner
+        run: docker build -f docker/Dockerfile.qemu -t redoubt-qemu .
+
+      - name: Smoke boot through the shell prompt
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work redoubt-qemu sh -ec '
+            rm -f .ci-serial.log
+            timeout 45s qemu-system-x86_64 \
+              -drive format=raw,file=redoubt-bios.img \
+              -display none \
+              -serial file:/work/.ci-serial.log \
+              -no-reboot || test "$?" = 124
+            grep -aF "redoubt shell ready" .ci-serial.log
+            ! grep -aF "[redoubt][PANIC]" .ci-serial.log
+          '
+
+      - name: Verified program store mounts a verified volume
+        run: |
+          grep -aF "program store signature VERIFIED" .drive-serial.log >/dev/null 2>&1 || true
+          cp redoubt-bios.img .ci-boot.img
+          REDOUBT_IMAGE=.ci-boot.img REDOUBT_MON_PORT=4460 ./tools/drive.sh 12 'slot' 'get hostname' > .ci-boot.log
+          grep -aF "program store signature VERIFIED" .ci-boot.log
+          grep -aF "mounted slot A gen 1" .ci-boot.log
+          grep -aF "A gen 1" .ci-boot.log
+          grep -aF "hostname=redoubt-dev-01" .ci-boot.log
+          ! grep -aF "[read-errno" .ci-boot.log
+          ! grep -aF "[redoubt][PANIC]" .ci-boot.log
+
+      - name: Contain a user fault and recover the shell
+        run: |
+          cp redoubt-bios.img .ci-fault.img
+          cp store.img .ci-fault-store.img
+          REDOUBT_IMAGE=.ci-fault.img REDOUBT_VOLUME=.ci-fault-store.img REDOUBT_MON_PORT=4461 \
+            ./tools/drive.sh 12 'exec fault-test' 'uptime' > .ci-fault.log
+          grep -aF "faulted: exception #6" .ci-fault.log
+          grep -aF "ok: 'fault-test' exited 262" .ci-fault.log
+          grep -aF "up " .ci-fault.log
+          ! grep -aF "[redoubt][PANIC]" .ci-fault.log
+
+      - name: Supervise a service through stop/start cycles
+        run: |
+          cp redoubt-bios.img .ci-svc.img
+          cp store.img .ci-svc-store.img
+          REDOUBT_IMAGE=.ci-svc.img REDOUBT_VOLUME=.ci-svc-store.img REDOUBT_MON_PORT=4462 \
+            REDOUBT_POST_WAIT=6 \
+            ./tools/drive.sh 12 'services' 'stop heart' 'services' 'start heart' 'services' > .ci-svc.log
+          grep -aF "heart running" .ci-svc.log
+          grep -aF "ok stopping" .ci-svc.log
+          grep -aF "heart stopped" .ci-svc.log
+          grep -aF "ok started" .ci-svc.log
+          # the restarted service keeps beating
+          test "$(grep -acF '[heart] beat' .ci-svc.log)" -ge 2
+          ! grep -aF "[redoubt][PANIC]" .ci-svc.log
+
+      - name: Apply a signed A/B update and boot into the new slot
+        run: |
+          cargo run -p redoubt-tools --locked --release -- updpack \
+            --image store.img --payload tools/factory-payload.txt --gen 2 --key keys/dev/redoubt
+          cp redoubt-bios.img .ci-upd.img
+          cp store.img .ci-upd-store.img
+          REDOUBT_IMAGE=.ci-upd.img REDOUBT_VOLUME=.ci-upd-store.img REDOUBT_MON_PORT=4463 \
+            REDOUBT_REBOOT_OK=1 REDOUBT_POST_WAIT=14 \
+            ./tools/drive.sh 16 'update' 'reboot' > .ci-upd.log
+          grep -aF "ok applied" .ci-upd.log
+          grep -aF "mounted slot B gen 2" .ci-upd.log
+          ! grep -aF "[redoubt][PANIC]" .ci-upd.log
+
+      - name: Recover by explicitly selecting a verified prior slot
+        run: |
+          cp redoubt-bios.img .ci-recovery.img
+          cp store.img .ci-recovery-store.img
+          cargo run -p redoubt-tools --locked --release -- updpack \
+            --image .ci-recovery-store.img --payload tools/factory-payload.txt --gen 2 \
+            --key keys/dev/redoubt
+          # Install a verified B slot, then use the offline console to make
+          # the independently verified A slot the next boot target.
+          REDOUBT_IMAGE=.ci-recovery.img REDOUBT_VOLUME=.ci-recovery-store.img REDOUBT_MON_PORT=4473 \
+            ./tools/drive.sh 12 'update' > .ci-recovery-update.log
+          REDOUBT_IMAGE=.ci-recovery.img REDOUBT_VOLUME=.ci-recovery-store.img REDOUBT_MON_PORT=4474 \
+            ./tools/drive.sh 12 'recovery status' 'recovery select a confirm' > .ci-recovery-select.log
+          grep -aF 'A valid gen 1' .ci-recovery-select.log
+          grep -aF 'B valid gen 2' .ci-recovery-select.log
+          grep -aF 'ok selected A; reboot' .ci-recovery-select.log
+          REDOUBT_IMAGE=.ci-recovery.img REDOUBT_VOLUME=.ci-recovery-store.img REDOUBT_MON_PORT=4475 \
+            ./tools/drive.sh 12 'slot' > .ci-recovery-boot.log
+          grep -aF 'mounted slot A gen 1' .ci-recovery-boot.log
+          grep -aF 'A gen 1' .ci-recovery-boot.log
+          ! grep -aF '[redoubt][PANIC]' .ci-recovery-boot.log
+
+      - name: Reject a tampered package without touching the running slot
+        run: |
+          cargo run -p redoubt-tools --locked --release -- updpack \
+            --image store.img --payload tools/factory-payload.txt --gen 3 \
+            --key keys/dev/redoubt --corrupt
+          cp redoubt-bios.img .ci-bad.img
+          cp store.img .ci-bad-store.img
+          REDOUBT_IMAGE=.ci-bad.img REDOUBT_VOLUME=.ci-bad-store.img REDOUBT_MON_PORT=4464 \
+            ./tools/drive.sh 14 'update' 'slot' > .ci-bad.log
+          grep -aF "err: BAD SIGNATURE" .ci-bad.log
+          # the running system is untouched by the rejected package
+          grep -aE "B gen 2|A gen [0-9]+" .ci-bad.log
+          ! grep -aF "ok applied" .ci-bad.log
+
+      - name: Install, execute, persist, reject, and remove signed apps
+        run: |
+          cp redoubt-bios.img .ci-app.img
+          cp store.img .ci-app-store.img
+          cargo run -p redoubt-tools --locked --release -- apppack \
+            --image .ci-app-store.img \
+            --elf target/x86_64-unknown-none/release/redoubt-hello \
+            --name hello-app --version 1 --key keys/dev/redoubt
+          REDOUBT_IMAGE=.ci-app.img REDOUBT_VOLUME=.ci-app-store.img REDOUBT_MON_PORT=4467 \
+            REDOUBT_POST_WAIT=8 \
+            ./tools/drive.sh 12 'app install' 'apps' 'app run hello-app' > .ci-app-install.log
+          grep -aF "ok app hello-app v1" .ci-app-install.log
+          grep -aF "hello-app 1" .ci-app-install.log
+          grep -aF "ok app 'hello-app' exited 7" .ci-app-install.log
+          ! grep -aF "[redoubt][PANIC]" .ci-app-install.log
+          # The app survives a cold boot and remains independently verified.
+          REDOUBT_IMAGE=.ci-app.img REDOUBT_VOLUME=.ci-app-store.img REDOUBT_MON_PORT=4468 \
+            REDOUBT_POST_WAIT=8 \
+            ./tools/drive.sh 12 'apps' 'app run hello-app' > .ci-app-reboot.log
+          grep -aF "hello-app 1" .ci-app-reboot.log
+          grep -aF "ok app 'hello-app' exited 7" .ci-app-reboot.log
+          # A package altered after signing is rejected; the installed v1
+          # remains selectable. Removal revokes both paired slot headers.
+          cargo run -p redoubt-tools --locked --release -- apppack \
+            --image .ci-app-store.img \
+            --elf target/x86_64-unknown-none/release/redoubt-hello \
+            --name hello-app --version 2 --key keys/dev/redoubt --corrupt
+          REDOUBT_IMAGE=.ci-app.img REDOUBT_VOLUME=.ci-app-store.img REDOUBT_MON_PORT=4469 \
+            ./tools/drive.sh 12 'app install' 'apps' 'app remove hello-app' 'apps' > .ci-app-reject.log
+          grep -aF "err: BAD PACKAGE" .ci-app-reject.log
+          grep -aF "hello-app 1" .ci-app-reject.log
+          grep -aF "ok removed" .ci-app-reject.log
+          grep -aF "no installed apps" .ci-app-reject.log
+          ! grep -aF "[redoubt][PANIC]" .ci-app-reject.log
+
+      - name: Roll back at boot when the active slot fails verification
+        run: |
+          cargo run -p redoubt-tools --locked --release -- updpack \
+            --image store.img --payload tools/factory-payload.txt --gen 2 --key keys/dev/redoubt
+          cp redoubt-bios.img .ci-rb.img
+          cp store.img .ci-rb-store.img
+          # install gen2 into slot B (no reboot), then flip one byte inside
+          # the now-ACTIVE slot's payload region, simulating bit rot or a
+          # tampered deployment
+          REDOUBT_IMAGE=.ci-rb.img REDOUBT_VOLUME=.ci-rb-store.img REDOUBT_MON_PORT=4465 \
+            ./tools/drive.sh 12 'update' > /dev/null
+          python3 - <<-'PY'
+          with open('.ci-rb-store.img','r+b') as f:
+              off = 1036*512 + 100   # slot B payload region
+              f.seek(off); b = f.read(1)
+              f.seek(off); f.write(bytes([b[0] ^ 0x01]))
+          PY
+          REDOUBT_IMAGE=.ci-rb.img REDOUBT_VOLUME=.ci-rb-store.img REDOUBT_MON_PORT=4466 \
+            ./tools/drive.sh 12 'slot' > .ci-rb.log
+          grep -aF "[store] active invalid; rollback" .ci-rb.log
+          grep -aE "mounted slot A gen" .ci-rb.log
+          ! grep -aF "[redoubt][PANIC]" .ci-rb.log
+
+      - name: Recover a torn superblock from independently verified slots
+        run: |
+          cargo run -p redoubt-tools --locked --release -- updpack \
+            --image store.img --payload tools/factory-payload.txt --gen 2 --key keys/dev/redoubt
+          cp redoubt-bios.img .ci-torn-sb.img
+          cp store.img .ci-torn-sb-store.img
+          REDOUBT_IMAGE=.ci-torn-sb.img REDOUBT_VOLUME=.ci-torn-sb-store.img REDOUBT_MON_PORT=4476 \
+            ./tools/drive.sh 12 'update' > .ci-torn-sb-update.log
+          # Simulate a power cut in the final superblock-sector write. The
+          # new slot is complete but its active pointer authentication tag is
+          # torn; mount must reconstruct the pointer from signed A/B slots.
+          python3 - <<-'PY'
+          with open('.ci-torn-sb-store.img', 'r+b') as f:
+              f.seek(0x48)
+              b = f.read(1)
+              f.seek(0x48)
+              f.write(bytes([b[0] ^ 1]))
+          PY
+          REDOUBT_IMAGE=.ci-torn-sb.img REDOUBT_VOLUME=.ci-torn-sb-store.img REDOUBT_MON_PORT=4477 \
+            ./tools/drive.sh 12 'slot' > .ci-torn-sb.log
+          grep -aF '[storaged] superblock recovered' .ci-torn-sb.log
+          grep -aF 'mounted slot B gen 2' .ci-torn-sb.log
+          grep -aF 'B gen 2' .ci-torn-sb.log
+          ! grep -aF '[redoubt][PANIC]' .ci-torn-sb.log
