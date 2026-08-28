@@ -168,6 +168,33 @@ impl Volume {
     }
 }
 
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    fn volume(sectors: u64) -> Volume {
+        Volume {
+            file: std::fs::File::open("/dev/null").unwrap(),
+            sectors,
+        }
+    }
+
+    #[test]
+    fn lba_bounds_reject_out_of_range_and_overflow() {
+        let vol = volume(10);
+        assert_eq!(vol.lba_offset(9, 1).unwrap(), 9 * layout::SECTOR as u64);
+        assert!(vol.lba_offset(10, 1).is_err());
+        assert!(vol.lba_offset(u64::MAX, 1).is_err());
+        assert!(vol.lba_offset(9, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn lba_bounds_accept_an_empty_write_at_the_end() {
+        let vol = volume(10);
+        assert_eq!(vol.lba_offset(10, 0).unwrap(), 10 * layout::SECTOR as u64);
+    }
+}
+
 /// The factory system definition written into slot A at format time. Must
 /// stay in sync with storaged's compiled-in recovery default.
 pub const FACTORY_PAYLOAD: &str = "\
