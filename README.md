@@ -128,3 +128,7 @@ deliverable laptop and ESP32 product tracks.
 ## License
 
 Redoubt OS is available under the [Apache License 2.0](LICENSE).
+
+---
+
+<p align="center">Built by <a href="https://sheheryar.xyz">Sheheryar</a> · <a href="https://github.com/hexa3">github.com/hexa3</a></p>
