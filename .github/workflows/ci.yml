@@ -123,6 +123,7 @@ jobs:
 
       - name: Install, execute, persist, reject, and remove signed apps
         run: |
+          cargo build -p redoubt-hello --target x86_64-unknown-none --release
           cp redoubt-bios.img .ci-app.img
           cp store.img .ci-app-store.img
           cargo run -p redoubt-tools --locked --release -- apppack \
